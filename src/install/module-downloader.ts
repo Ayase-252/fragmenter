@@ -27,6 +27,8 @@ export interface ModuleDownloaderEvents {
     'error': (error: Error) => void,
 }
 
+const DOWNLOAD_MEMO_FILE_PATH = './progress-memo'
+
 export class ModuleDownloader extends (EventEmitter as new () => TypedEventEmitter<ModuleDownloaderEvents>) {
     constructor(
         private readonly ctx: FragmenterContext,
@@ -150,9 +152,10 @@ export class ModuleDownloader extends (EventEmitter as new () => TypedEventEmitt
 
     private async downloadModuleFileParts(destDir: string): Promise<boolean> {
         const numParts = this.module.splitFileCount;
+        const startParts = await this.retrieveLastSuccessParts() + 1 ?? 0
 
         let totalLoaded = 0;
-        for (let i = 0; i < numParts; i++) {
+        for (let i = startParts; i < numParts; i++) {
             this.ctx.logTrace(`[ModuleDownloader] downloading module part #${i + 1}`);
 
             const partIndexString = (i + 1).toString()
@@ -200,6 +203,7 @@ export class ModuleDownloader extends (EventEmitter as new () => TypedEventEmitt
                 }
 
                 totalLoaded += bytesDownloaded;
+                this.memoLastSuccessParts(i)
             } catch (e) {
                 this.ctx.logError(`[ModuleDownloader] part download at '${url}' failed`, e.message);
 
@@ -268,5 +272,37 @@ export class ModuleDownloader extends (EventEmitter as new () => TypedEventEmitt
         }
 
         return true;
+    }
+
+    private async readMemoFile() {
+      let content: Record<string, number>;
+      try {
+        content = JSON.parse(
+          await fs.readFile(DOWNLOAD_MEMO_FILE_PATH).toString()
+        );
+      } catch (e) {
+        this.ctx.logInfo(
+          `[ModuleDownloader] Progress Memo File is corrupted, file is reset'`
+        );
+        await fs.unlink(DOWNLOAD_MEMO_FILE_PATH);
+        content = {};
+      }
+      return content;
+    }
+
+    private getModuleDownloadMemoId() {
+      return `${this.module.name}-${this.module.hash}`;
+    }
+
+    private async memoLastSuccessParts(partIndex: number) {
+      const content: Record<string, number> = await this.readMemoFile();
+      const moduleDownloadId = this.getModuleDownloadMemoId();
+      content[moduleDownloadId] = partIndex;
+      await fs.writeFile(DOWNLOAD_MEMO_FILE_PATH, JSON.stringify(content));
+    }
+
+    private async retrieveLastSuccessParts() {
+      const content: Record<string, number> = await this.readMemoFile();
+      return content[this.getModuleDownloadMemoId()];
     }
 }
